@@ -17,7 +17,7 @@ PLATAFORMA_COLORES = {
     "Instagram": "#ffc0cb",  # Rosa
     "TikTok": "#ffffff",     # Blanco
     "Facebook": "#add8e6",   # Azul clarito
-    "Otra": "#dddddd"        # Gris (por si hay “Otra”)
+    "Otra": "#dddddd"        # Gris para "Otra"
 }
 
 NOMBRE_MESES = [
@@ -29,6 +29,9 @@ NOMBRE_MESES = [
 # FUNCIONES PARA CONECTAR A GOOGLE SHEETS
 # --------------------------------------------------------------------------------
 def get_gsheet_connection():
+    """
+    Conecta con Google Sheets usando la cuenta de servicio en st.secrets["gcp_service_account"].
+    """
     cred_json_str = st.secrets["gcp_service_account"]
     creds_dict = json.loads(cred_json_str)
     scope = [
@@ -40,6 +43,11 @@ def get_gsheet_connection():
     return client
 
 def cargar_datos(client, sheet_id):
+    """
+    Lee todos los datos de la pestaña WORKSHEET_NAME en la hoja con 'sheet_id'.
+    Devuelve un DataFrame con las columnas definidas en COLUMNS.
+    Si no existe la pestaña, la crea vacía.
+    """
     sh = client.open_by_key(sheet_id)
     try:
         worksheet = sh.worksheet(WORKSHEET_NAME)
@@ -58,6 +66,9 @@ def cargar_datos(client, sheet_id):
         return df
 
 def guardar_datos(client, sheet_id, df):
+    """
+    Sobrescribe todo el contenido de la pestaña WORKSHEET_NAME con los datos del DF.
+    """
     sh = client.open_by_key(sheet_id)
     for col in COLUMNS:
         if col not in df.columns:
@@ -80,35 +91,38 @@ def guardar_datos(client, sheet_id, df):
 
 def dashboard(df):
     """
-    Muestra un panel principal con descripción y botones de navegación.
+    Pantalla principal con explicación y botones de navegación.
     """
     st.title("Dashboard - Calendario de Contenidos")
 
     st.markdown("""
-    ¡Bienvenido(a) a tu **Calendario de Contenidos**!  
+    Bienvenido(a) a tu **Calendario de Contenidos**. 
     
-    **¿Cómo funciona?**  
-    - En la sección **Agregar Evento**: puedes ingresar nuevos posts o actividades, con su fecha, título, festividad, plataforma y estado.  
-    - En la sección **Editar/Eliminar Evento**: verás la lista de todos tus contenidos y podrás modificarlos o borrarlos.  
-    - En **Vista Mensual**: filtras datos por un mes específico.  
-    - En **Vista Anual**: ves un calendario grande, un mes debajo del otro, con recuadros de colores según la plataforma.  
+    **¿Cómo funciona este panel?**  
+    - **Agregar Evento**: Agregar nuevas publicaciones (fecha, título, plataforma...).  
+    - **Editar/Eliminar Evento**: Ver toda la lista y modificar o borrar.  
+    - **Vista Mensual**: Filtra datos por mes específico.  
+    - **Vista Anual**: Ve un calendario grande, un mes debajo del otro, con colores según la plataforma.
 
-    A continuación, puedes navegar a las secciones desde este panel:
+    Elige una de estas opciones:
     """)
 
-    # Botones directos a cada sección
+    # Botones con key único
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        if st.button("Agregar Evento"):
+        if st.button("Agregar Evento", key="dash_btn_agregar"):
             st.session_state["page"] = "Agregar"
+
     with col2:
-        if st.button("Editar/Eliminar Evento"):
+        if st.button("Editar/Eliminar Evento", key="dash_btn_editar"):
             st.session_state["page"] = "Editar"
+
     with col3:
-        if st.button("Vista Mensual"):
+        if st.button("Vista Mensual", key="dash_btn_mensual"):
             st.session_state["page"] = "Mensual"
+
     with col4:
-        if st.button("Vista Anual"):
+        if st.button("Vista Anual", key="dash_btn_anual"):
             st.session_state["page"] = "Anual"
 
     st.write("---")
@@ -122,9 +136,9 @@ def dashboard(df):
             for estado, count in conteo_estado.items():
                 st.write(f"- **{estado}**: {count}")
         else:
-            st.warning("No existe la columna 'Estado' en el DataFrame.")
+            st.warning("No existe la columna 'Estado'.")
     else:
-        st.info("No hay datos aún. ¡Empieza agregando un nuevo evento!")
+        st.info("No hay datos. Empieza creando tu primer Evento.")
 
 def vista_agregar(df, client, sheet_id):
     st.title("Agregar Nuevo Evento")
@@ -162,7 +176,7 @@ def vista_editar_eliminar(df, client, sheet_id):
 
     indices = df.index.tolist()
     if indices:
-        selected_index = st.selectbox("Selecciona la fila a modificar", indices)
+        selected_index = st.selectbox("Selecciona la fila a modificar", indices, key="sel_index_editar")
         if selected_index is not None:
             row_data = df.loc[selected_index]
 
@@ -188,9 +202,9 @@ def vista_editar_eliminar(df, client, sheet_id):
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    submit_edit = st.form_submit_button("Guardar cambios")
+                    submit_edit = st.form_submit_button("Guardar cambios", key="btn_guardar_edit")
                 with col2:
-                    submit_delete = st.form_submit_button("Borrar este evento")
+                    submit_delete = st.form_submit_button("Borrar este evento", key="btn_borrar_evento")
 
                 if submit_edit:
                     df.at[selected_index, "Fecha"] = fecha_edit
@@ -201,7 +215,6 @@ def vista_editar_eliminar(df, client, sheet_id):
                     df.at[selected_index, "Notas"] = notas_edit
                     guardar_datos(client, sheet_id, df)
                     st.success("¡Evento editado y guardado!")
-                    # No hay experimental_rerun, se recarga en la siguiente interacción.
 
                 if submit_delete:
                     df.drop(index=selected_index, inplace=True)
@@ -216,7 +229,7 @@ def vista_mensual(df):
         st.info("No hay datos.")
         return
 
-    nombre_mes = st.selectbox("Selecciona el mes", NOMBRE_MESES)
+    nombre_mes = st.selectbox("Selecciona el mes", NOMBRE_MESES, key="selbox_mes")
     mes_index = NOMBRE_MESES.index(nombre_mes) + 1  # 1-12
     df["Mes"] = df["Fecha"].dt.month
     filtrado = df[df["Mes"] == mes_index].drop(columns=["Mes"], errors="ignore")
@@ -225,26 +238,26 @@ def vista_mensual(df):
     st.dataframe(filtrado)
 
 def vista_anual(df):
-    st.title("Vista Anual - Calendario Global (Un Mes por Pantalla)")
+    st.title("Vista Anual - Calendario Global (un mes debajo del otro)")
 
     if df.empty:
         st.info("No hay datos.")
         return
 
-    # Creamos estilos con 1 mes por “fila” (vertical)
+    # Creamos estilos con 1 mes por bloque vertical
     html_output = []
     html_output.append("""
     <style>
     .calendar-container {
         display: flex;
         flex-direction: column; /* un mes debajo del otro */
-        gap: 2rem; /* separación entre meses */
+        gap: 2rem;
         width: 100%;
     }
     .month-card {
         border: 2px solid #ccc;
         padding: 0.5rem;
-        width: 100%; 
+        width: 100%;
     }
     .month-title {
         text-align: center;
@@ -284,7 +297,6 @@ def vista_anual(df):
     df["month"] = df["Fecha"].dt.month
     df["day"] = df["Fecha"].dt.day
 
-    # Podrías permitir que el usuario elija el año
     anios = df["year"].unique()
     if len(anios) == 1:
         anio = anios[0]
@@ -300,27 +312,29 @@ def vista_anual(df):
 
     for mes_idx in range(1, 13):
         df_mes = df_anio[df_anio["month"] == mes_idx]
-        if df_mes.empty:
-            # Igualmente mostraríamos el mes vacío
-            pass
 
-        month_start = datetime.date(int(anio), mes_idx, 1)
-        start_weekday = month_start.weekday()  # lunes=0, ... domingo=6
-        if mes_idx == 12:
-            next_month = datetime.date(int(anio)+1, 1, 1)
-        else:
-            next_month = datetime.date(int(anio), mes_idx+1, 1)
-        num_dias = (next_month - month_start).days
+        # Calcular cuántos días tiene el mes
+        try:
+            month_start = datetime.date(int(anio), mes_idx, 1)
+            if mes_idx == 12:
+                next_month = datetime.date(int(anio)+1, 1, 1)
+            else:
+                next_month = datetime.date(int(anio), mes_idx+1, 1)
+            num_dias = (next_month - month_start).days
+            start_weekday = month_start.weekday()  # lunes=0... domingo=6
+        except:
+            # Por seguridad
+            continue
 
         mes_name = NOMBRE_MESES[mes_idx-1]
-        # Contenedor del mes
         html_output.append(f'<div class="month-card"><div class="month-title">{mes_name} {anio}</div>')
         html_output.append('<div class="days-grid">')
 
-        # Celdas vacías antes del 1
+        # Celdas vacías antes del día 1
         for _ in range(start_weekday):
             html_output.append('<div class="day-cell"></div>')
 
+        # Llenar días
         for day_num in range(1, num_dias+1):
             df_day = df_mes[df_mes["day"] == day_num]
             day_html = f'<span class="day-number">{day_num}</span><br/>'
@@ -336,9 +350,9 @@ def vista_anual(df):
                     day_html += '</span>'
             html_output.append(f'<div class="day-cell">{day_html}</div>')
 
-        html_output.append('</div></div>')  # end days-grid, end month-card
+        html_output.append('</div></div>')  # cerrar days-grid y month-card
 
-    html_output.append('</div>')  # end calendar-container
+    html_output.append('</div>')  # cerrar calendar-container
 
     st.markdown("\n".join(html_output), unsafe_allow_html=True)
 
@@ -346,33 +360,31 @@ def vista_anual(df):
 # FUNCIÓN PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    # Ajustamos layout
     st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
 
-    # Inicializamos la clave 'page' en session_state si no existe
+    # Inicializamos la clave 'page' si no existe
     if "page" not in st.session_state:
         st.session_state["page"] = "Dashboard"
 
-    # Conectamos a Google Sheets
+    # Conexión a Google Sheets
     client = get_gsheet_connection()
     sheet_id = st.secrets["SHEET_ID"]
-    # Cargamos DataFrame
     df = cargar_datos(client, sheet_id)
 
-    # Barra lateral de navegación (siempre)
+    # Barra lateral de navegación, con keys únicos
     st.sidebar.title("Navegación Global")
-    if st.sidebar.button("Dashboard"):
+    if st.sidebar.button("Dashboard", key="side_dash"):
         st.session_state["page"] = "Dashboard"
-    if st.sidebar.button("Agregar Evento"):
+    if st.sidebar.button("Agregar Evento", key="side_agregar"):
         st.session_state["page"] = "Agregar"
-    if st.sidebar.button("Editar/Eliminar Evento"):
+    if st.sidebar.button("Editar/Eliminar Evento", key="side_editar"):
         st.session_state["page"] = "Editar"
-    if st.sidebar.button("Vista Mensual"):
+    if st.sidebar.button("Vista Mensual", key="side_mensual"):
         st.session_state["page"] = "Mensual"
-    if st.sidebar.button("Vista Anual"):
+    if st.sidebar.button("Vista Anual", key="side_anual"):
         st.session_state["page"] = "Anual"
 
-    # Lógica de selección de página
+    # Navegación principal
     page = st.session_state["page"]
     if page == "Dashboard":
         dashboard(df)
@@ -384,6 +396,10 @@ def main():
         vista_mensual(df)
     elif page == "Anual":
         vista_anual(df)
+
+if __name__ == "__main__":
+    main()
+
 
 
 if __name__ == "__main__":
