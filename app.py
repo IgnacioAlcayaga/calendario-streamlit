@@ -5,10 +5,11 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
 import datetime
+import math
 
-# -------------------------------------------
+# -----------------------------------------------------------------
 # 1) set_page_config => PRIMER COMANDO
-# -------------------------------------------
+# -----------------------------------------------------------------
 st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
 
 # --------------------------------------------------------------------------------
@@ -22,7 +23,7 @@ PLATAFORMA_COLORES = {
     "Instagram": "#ffc0cb",  # Rosa
     "TikTok": "#ffffff",     # Blanco
     "Facebook": "#add8e6",   # Azul clarito
-    "Otra": "#dddddd"        # Gris para "Otra"
+    "Otra": "#dddddd"        # Gris
 }
 
 NOMBRE_MESES = [
@@ -34,9 +35,6 @@ NOMBRE_MESES = [
 # FUNCIONES PARA CONECTAR A GOOGLE SHEETS
 # --------------------------------------------------------------------------------
 def get_gsheet_connection():
-    """
-    Conecta con Google Sheets usando la cuenta de servicio en st.secrets["gcp_service_account"].
-    """
     cred_json_str = st.secrets["gcp_service_account"]
     creds_dict = json.loads(cred_json_str)
     scope = [
@@ -48,11 +46,6 @@ def get_gsheet_connection():
     return client
 
 def cargar_datos(client, sheet_id):
-    """
-    Lee todos los datos de la pestaña WORKSHEET_NAME en la hoja con 'sheet_id'.
-    Devuelve un DataFrame con las columnas definidas en COLUMNS.
-    Si no existe la pestaña, la crea vacía.
-    """
     sh = client.open_by_key(sheet_id)
     try:
         worksheet = sh.worksheet(WORKSHEET_NAME)
@@ -71,9 +64,6 @@ def cargar_datos(client, sheet_id):
         return df
 
 def guardar_datos(client, sheet_id, df):
-    """
-    Sobrescribe todo el contenido de la pestaña WORKSHEET_NAME con los datos del DF.
-    """
     sh = client.open_by_key(sheet_id)
     for col in COLUMNS:
         if col not in df.columns:
@@ -91,12 +81,20 @@ def guardar_datos(client, sheet_id, df):
     worksheet.update(data_to_upload)
 
 # --------------------------------------------------------------------------------
+# FUNCIONES DE SEMANA
+# --------------------------------------------------------------------------------
+def semana_del_mes(fecha: datetime.date) -> int:
+    """
+    Retorna un número de semana del mes basado en día // 7 + 1.
+    Ej: días 1-7 => Semana 1, días 8-14 => Semana 2, etc.
+    """
+    dia = fecha.day
+    return (dia - 1) // 7 + 1  # 1..5
+
+# --------------------------------------------------------------------------------
 # PANTALLAS
 # --------------------------------------------------------------------------------
 def dashboard(df):
-    """
-    Pantalla principal con explicación y botones de navegación.
-    """
     st.title("Dashboard - Calendario de Contenidos")
 
     st.markdown("""
@@ -105,13 +103,10 @@ def dashboard(df):
     **¿Cómo funciona este panel?**  
     - **Agregar Evento**: Agregar nuevas publicaciones (fecha, título, plataforma...).  
     - **Editar/Eliminar Evento**: Ver toda la lista y modificar o borrar.  
-    - **Vista Mensual**: Filtra datos por un mes específico.  
-    - **Vista Anual**: Ve un calendario grande, un mes debajo del otro, con colores según la plataforma.
-
-    Elige una de estas opciones:
+    - **Vista Mensual**: Filtra datos por un mes específico, agrupando semanas.  
+    - **Vista Anual**: Ve un calendario grande (un mes debajo del otro) y una barra de estado lateral con conteo de publicaciones planeadas/pendientes por plataforma y semana.
     """)
 
-    # Botones con key único
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("Agregar Evento", key="dash_btn_agregar"):
@@ -140,7 +135,7 @@ def dashboard(df):
             for estado, count in conteo_estado.items():
                 st.write(f"- **{estado}**: {count}")
         else:
-            st.warning("No existe la columna 'Estado'.")
+            st.warning("No existe la columna 'Estado' en el DataFrame.")
     else:
         st.info("No hay datos. Empieza creando tu primer Evento.")
 
@@ -227,152 +222,204 @@ def vista_editar_eliminar(df, client, sheet_id):
                     st.warning("Evento eliminado.")
 
 def vista_mensual(df):
-    st.title("Vista Mensual")
+    st.title("Vista Mensual (con Semanas)")
 
     if df.empty:
         st.info("No hay datos.")
         return
 
     nombre_mes = st.selectbox("Selecciona el mes", NOMBRE_MESES, key="selbox_mes")
-    mes_index = NOMBRE_MESES.index(nombre_mes) + 1  # 1-12
-    df["Mes"] = df["Fecha"].dt.month
-    filtrado = df[df["Mes"] == mes_index].drop(columns=["Mes"], errors="ignore")
+    mes_index = NOMBRE_MESES.index(nombre_mes) + 1
+    df_fil = df[df["Fecha"].dt.month == mes_index]
 
-    st.write(f"### Eventos de {nombre_mes}")
-    st.dataframe(filtrado)
+    if df_fil.empty:
+        st.warning(f"No hay datos para {nombre_mes}.")
+        return
+
+    # Creamos la columna "SemanaMes"
+    df_fil["SemanaMes"] = df_fil["Fecha"].apply(semana_del_mes)
+    # Ordenamos
+    df_fil = df_fil.sort_values(by=["SemanaMes", "Fecha"])
+
+    st.write(f"### Eventos de {nombre_mes} agrupados por semana")
+
+    # Mostramos un “acordeón” por semana
+    semanas = sorted(df_fil["SemanaMes"].unique())
+    for sem in semanas:
+        subset = df_fil[df_fil["SemanaMes"] == sem]
+        st.subheader(f"Semana {sem}")
+        # Para cada día en la semana, podemos mostrar una mini-tabla:
+        #  (o un st.dataframe con subset)
+        st.dataframe(subset.drop(columns=["SemanaMes"], errors="ignore"))
 
 def vista_anual(df):
-    st.title("Vista Anual - Calendario Global (un mes debajo del otro)")
+    st.title("Vista Anual - Calendario + Barra Estado (Plataformas)")
 
     if df.empty:
         st.info("No hay datos.")
         return
 
-    # Creamos estilos con 1 mes por bloque vertical
-    html_output = []
-    html_output.append("""
-    <style>
-    .calendar-container {
-        display: flex;
-        flex-direction: column; /* un mes debajo del otro */
-        gap: 2rem;
-        width: 100%;
-    }
-    .month-card {
-        border: 2px solid #ccc;
-        padding: 0.5rem;
-        width: 100%;
-    }
-    .month-title {
-        text-align: center;
-        font-weight: bold;
-        margin-bottom: 0.5rem;
-        font-size: 1.2rem;
-    }
-    .days-grid {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        grid-auto-rows: 80px;
-        gap: 2px;
-    }
-    .day-cell {
-        border: 1px solid #eee;
-        padding: 3px;
-        position: relative;
-        overflow: hidden;
-        font-size: 0.75rem;
-    }
-    .day-number {
-        font-weight: bold;
-        font-size: 0.8rem;
-    }
-    .event-label {
-        font-size: 0.7rem;
-        margin-top: 2px;
-        display: block;
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-    }
-    </style>
-    """)
+    # Creamos contenedor principal: 2 columnas (calendario a la izq, barra de estado a la derecha)
+    col_cal, col_bar = st.columns([3,1])  # 3:1 de ancho
 
-    df["year"] = df["Fecha"].dt.year
-    df["month"] = df["Fecha"].dt.month
-    df["day"] = df["Fecha"].dt.day
+    # --- Lado izquierdo: CALENDARIO ---
+    with col_cal:
+        st.write("#### Calendario Mensual (1 columna por mes, con días)")
 
-    anios = df["year"].unique()
-    if len(anios) == 1:
-        anio = anios[0]
-    else:
-        anio = st.number_input("Elige año:", value=int(datetime.date.today().year), step=1)
+        # CSS con 1 mes por bloque vertical
+        html_output = []
+        html_output.append("""
+        <style>
+        .calendar-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            width: 100%;
+        }
+        .month-card {
+            border: 2px solid #ccc;
+            padding: 0.5rem;
+            width: 100%;
+        }
+        .month-title {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+            font-size: 1.2rem;
+        }
+        .days-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            grid-auto-rows: 80px;
+            gap: 2px;
+        }
+        .day-cell {
+            border: 1px solid #eee;
+            padding: 3px;
+            position: relative;
+            overflow: hidden;
+            font-size: 0.75rem;
+        }
+        .day-number {
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+        .event-label {
+            font-size: 0.7rem;
+            margin-top: 2px;
+            display: block;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+        </style>
+        """)
 
-    df_anio = df[df["year"] == anio]
-    if df_anio.empty:
-        st.warning(f"No hay datos para el año {anio}.")
-        return
+        df["year"] = df["Fecha"].dt.year
+        df["month"] = df["Fecha"].dt.month
+        df["day"] = df["Fecha"].dt.day
 
-    html_output.append('<div class="calendar-container">')
+        anios = df["year"].unique()
+        if len(anios) == 1:
+            anio = anios[0]
+        else:
+            anio = st.number_input("Elige año:", value=int(datetime.date.today().year), step=1)
 
-    for mes_idx in range(1, 13):
-        df_mes = df_anio[df_anio["month"] == mes_idx]
+        df_anio = df[df["year"] == anio]
+        if df_anio.empty:
+            st.warning(f"No hay datos para el año {anio}.")
+        else:
+            html_output.append('<div class="calendar-container">')
 
-        # Calcular cuántos días tiene el mes
-        try:
-            month_start = datetime.date(int(anio), mes_idx, 1)
-            if mes_idx == 12:
-                next_month = datetime.date(int(anio)+1, 1, 1)
-            else:
-                next_month = datetime.date(int(anio), mes_idx+1, 1)
-            num_dias = (next_month - month_start).days
-            start_weekday = month_start.weekday()
-        except:
-            continue
+            for mes_idx in range(1, 13):
+                df_mes = df_anio[df_anio["month"] == mes_idx]
+                try:
+                    month_start = datetime.date(int(anio), mes_idx, 1)
+                    if mes_idx == 12:
+                        next_month = datetime.date(int(anio)+1, 1, 1)
+                    else:
+                        next_month = datetime.date(int(anio), mes_idx+1, 1)
+                    num_dias = (next_month - month_start).days
+                    start_weekday = month_start.weekday()
+                except:
+                    continue
 
-        mes_name = NOMBRE_MESES[mes_idx-1]
-        html_output.append(f'<div class="month-card"><div class="month-title">{mes_name} {anio}</div>')
-        html_output.append('<div class="days-grid">')
+                mes_name = NOMBRE_MESES[mes_idx-1]
+                html_output.append(f'<div class="month-card"><div class="month-title">{mes_name} {anio}</div>')
+                html_output.append('<div class="days-grid">')
 
-        # Celdas vacías antes del día 1
-        for _ in range(start_weekday):
-            html_output.append('<div class="day-cell"></div>')
+                # Celdas vacías antes del día 1
+                for _ in range(start_weekday):
+                    html_output.append('<div class="day-cell"></div>')
 
-        for day_num in range(1, num_dias+1):
-            df_day = df_mes[df_mes["day"] == day_num]
-            day_html = f'<span class="day-number">{day_num}</span><br/>'
-            if not df_day.empty:
-                for _, row in df_day.iterrows():
-                    plat = row["Plataforma"]
-                    color = PLATAFORMA_COLORES.get(plat, "#dddddd")
-                    title = (row["Titulo"][:10] + '...') if len(str(row["Titulo"])) > 10 else str(row["Titulo"])
-                    fest = (row["Festividad"][:10] + '...') if len(str(row["Festividad"])) > 10 else str(row["Festividad"])
-                    day_html += f'<span class="event-label" style="background-color:{color};">{title}'
-                    if fest.strip():
-                        day_html += f' ({fest})'
-                    day_html += '</span>'
-            html_output.append(f'<div class="day-cell">{day_html}</div>')
+                for day_num in range(1, num_dias+1):
+                    df_day = df_mes[df_mes["day"] == day_num]
+                    day_html = f'<span class="day-number">{day_num}</span><br/>'
+                    if not df_day.empty:
+                        for _, row in df_day.iterrows():
+                            plat = row["Plataforma"]
+                            color = PLATAFORMA_COLORES.get(plat, "#dddddd")
+                            title = (row["Titulo"][:10] + '...') if len(str(row["Titulo"])) > 10 else str(row["Titulo"])
+                            fest = (row["Festividad"][:10] + '...') if len(str(row["Festividad"])) > 10 else str(row["Festividad"])
+                            day_html += f'<span class="event-label" style="background-color:{color};">{title}'
+                            if fest.strip():
+                                day_html += f' ({fest})'
+                            day_html += '</span>'
+                    html_output.append(f'<div class="day-cell">{day_html}</div>')
 
-        html_output.append('</div></div>')  # cerrar days-grid y month-card
+                html_output.append('</div></div>')  # end days-grid & month-card
 
-    html_output.append('</div>')  # cerrar calendar-container
+            html_output.append('</div>')  # end calendar-container
 
-    st.markdown("\n".join(html_output), unsafe_allow_html=True)
+            st.markdown("\n".join(html_output), unsafe_allow_html=True)
+
+    # --- Lado derecho: BARRA DE ESTADO POR SEMANA/PLATAFORMA ---
+    with col_bar:
+        st.write("#### Estado Semanal por Plataforma")
+
+        if df_anio.empty:
+            st.info("No hay datos para el año seleccionado.")
+            return
+        # Definir "semana del mes"
+        df_anio["SemanaMes"] = df_anio["Fecha"].apply(semana_del_mes)
+        # Podríamos agrupar por (month, SemanaMes, Plataforma) y contar
+        # Ej: cuántos “Planeación” vs total
+        for mes_idx in range(1, 13):
+            df_mes = df_anio[df_anio["month"] == mes_idx]
+            if df_mes.empty:
+                continue
+
+            st.write(f"**{NOMBRE_MESES[mes_idx-1]}**")
+            # Semanas del mes
+            semanas_mes = sorted(df_mes["SemanaMes"].unique())
+            for semana in semanas_mes:
+                df_sem = df_mes[df_mes["SemanaMes"] == semana]
+                # Agrupamos por plataforma
+                if df_sem.empty:
+                    continue
+                st.write(f"- **Semana {semana}**")
+                plataformas_en_sem = df_sem["Plataforma"].unique()
+                for plat in plataformas_en_sem:
+                    subset_plat = df_sem[df_sem["Plataforma"] == plat]
+                    total_eventos = len(subset_plat)
+                    planeados = len(subset_plat[subset_plat["Estado"] != "Publicado"])  # o “Planeación” + “Diseño” + “Programado”
+                    # O define tu propia forma de contar “planeadas vs. publicadas”
+                    # Ej: x planeadas / y tot
+                    st.write(f"   - {plat}: {total_eventos - planeados}/{total_eventos} publicadas")
 
 # --------------------------------------------------------------------------------
 # FUNCIÓN PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    # NO set_page_config aquí, ya lo hicimos arriba.
-    # Iniciamos la clave 'page' si no existe
+    # No llamamos st.set_page_config aquí: ya lo hicimos al tope
     if "page" not in st.session_state:
         st.session_state["page"] = "Dashboard"
 
-    # Conexión a Google Sheets
     client = get_gsheet_connection()
     sheet_id = st.secrets["SHEET_ID"]
     df = cargar_datos(client, sheet_id)
 
-    # Barra lateral de navegación, con keys únicos
+    # Barra lateral
     st.sidebar.title("Navegación Global")
     if st.sidebar.button("Dashboard", key="side_dash"):
         st.session_state["page"] = "Dashboard"
@@ -385,7 +432,6 @@ def main():
     if st.sidebar.button("Vista Anual", key="side_anual"):
         st.session_state["page"] = "Anual"
 
-    # Navegación principal
     page = st.session_state["page"]
     if page == "Dashboard":
         dashboard(df)
@@ -400,4 +446,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
