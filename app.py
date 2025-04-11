@@ -6,6 +6,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
 import datetime
 
+# -------------------------------------------
+# 1) set_page_config => PRIMER COMANDO
+# -------------------------------------------
+st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
+
 # --------------------------------------------------------------------------------
 # CONFIGURACIÓN DE COLUMNAS Y PESTAÑA DE GOOGLE SHEETS
 # --------------------------------------------------------------------------------
@@ -88,7 +93,6 @@ def guardar_datos(client, sheet_id, df):
 # --------------------------------------------------------------------------------
 # PANTALLAS
 # --------------------------------------------------------------------------------
-
 def dashboard(df):
     """
     Pantalla principal con explicación y botones de navegación.
@@ -97,11 +101,11 @@ def dashboard(df):
 
     st.markdown("""
     Bienvenido(a) a tu **Calendario de Contenidos**. 
-    
+
     **¿Cómo funciona este panel?**  
     - **Agregar Evento**: Agregar nuevas publicaciones (fecha, título, plataforma...).  
     - **Editar/Eliminar Evento**: Ver toda la lista y modificar o borrar.  
-    - **Vista Mensual**: Filtra datos por mes específico.  
+    - **Vista Mensual**: Filtra datos por un mes específico.  
     - **Vista Anual**: Ve un calendario grande, un mes debajo del otro, con colores según la plataforma.
 
     Elige una de estas opciones:
@@ -321,9 +325,8 @@ def vista_anual(df):
             else:
                 next_month = datetime.date(int(anio), mes_idx+1, 1)
             num_dias = (next_month - month_start).days
-            start_weekday = month_start.weekday()  # lunes=0... domingo=6
+            start_weekday = month_start.weekday()
         except:
-            # Por seguridad
             continue
 
         mes_name = NOMBRE_MESES[mes_idx-1]
@@ -334,7 +337,6 @@ def vista_anual(df):
         for _ in range(start_weekday):
             html_output.append('<div class="day-cell"></div>')
 
-        # Llenar días
         for day_num in range(1, num_dias+1):
             df_day = df_mes[df_mes["day"] == day_num]
             day_html = f'<span class="day-number">{day_num}</span><br/>'
@@ -360,9 +362,8 @@ def vista_anual(df):
 # FUNCIÓN PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
-
-    # Inicializamos la clave 'page' si no existe
+    # NO set_page_config aquí, ya lo hicimos arriba.
+    # Iniciamos la clave 'page' si no existe
     if "page" not in st.session_state:
         st.session_state["page"] = "Dashboard"
 
@@ -396,11 +397,6 @@ def main():
         vista_mensual(df)
     elif page == "Anual":
         vista_anual(df)
-
-if __name__ == "__main__":
-    main()
-
-
 
 if __name__ == "__main__":
     main()
