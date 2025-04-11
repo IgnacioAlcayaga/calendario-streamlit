@@ -7,14 +7,14 @@ import datetime
 import calendar
 
 # --------------------------------------------------------------------------------
-# 1) DEBE SER PRIMER COMANDO DE STREAMLIT
+# 1) PRIMER COMANDO ST
 # --------------------------------------------------------------------------------
 st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
 
 # --------------------------------------------------------------------------------
 # CONFIGURACIÓN
 # --------------------------------------------------------------------------------
-COLUMNS = ["Fecha", "Titulo", "Festividad", "Plataforma", "Estado", "Notas"]
+COLUMNS = ["Fecha","Titulo","Festividad","Plataforma","Estado","Notas"]
 WORKSHEET_NAME = "Data"
 
 PLATAFORMA_COLORES = {
@@ -78,45 +78,42 @@ def guardar_datos(client, sheet_id, df):
     ws.update(data_to_upload)
 
 # --------------------------------------------------------------------------------
-# PANTALLAS
+# PÁGINAS
 # --------------------------------------------------------------------------------
 def dashboard(df):
     st.title("Dashboard - Calendario de Contenidos")
-
     st.markdown("""
     **Bienvenido(a)** a tu Calendario de Contenidos.
 
     - **Agregar Evento**: Crea nuevas publicaciones.
     - **Editar/Eliminar Evento**: Ver y modificar/borrar publicaciones existentes.
-    - **Vista Mensual**: Muestra semanas en bloques (cada semana con sus días, eventos y estado).
-    - **Vista Anual**: Muestra un calendario estilo “librería” con filas=semanas, columnas=días, y una columna de estado al costado.
+    - **Vista Mensual**: Muestra semanas en bloques (cada semana con sus días, eventos y al final un bloque de estado).
+    - **Vista Anual**: Calendario tipo librería, con las semanas en filas y un bloque de estado a la derecha.
     """)
 
-    col1,col2,col3,col4 = st.columns(4)
-    with col1:
+    c1,c2,c3,c4 = st.columns(4)
+    with c1:
         if st.button("Agregar Evento", key="dash_agregar"):
             st.session_state["page"] = "Agregar"
-    with col2:
+    with c2:
         if st.button("Editar/Eliminar Evento", key="dash_editar"):
             st.session_state["page"] = "Editar"
-    with col3:
+    with c3:
         if st.button("Vista Mensual", key="dash_mensual"):
             st.session_state["page"] = "Mensual"
-    with col4:
+    with c4:
         if st.button("Vista Anual", key="dash_anual"):
             st.session_state["page"] = "Anual"
 
     st.write("---")
     total_eventos = len(df)
     st.metric("Total de eventos registrados", total_eventos)
-
     if not df.empty and "Estado" in df.columns:
         st.subheader("Conteo por Estado")
         for estado, count in df["Estado"].value_counts().items():
             st.write(f"- **{estado}**: {count}")
     else:
         st.info("No hay datos o falta la columna 'Estado'.")
-
 
 def vista_agregar(df, client, sheet_id):
     st.title("Agregar Evento")
@@ -141,12 +138,10 @@ def vista_agregar(df, client, sheet_id):
             guardar_datos(client, sheet_id, df)
             st.success("Evento agregado con éxito.")
 
-
 def vista_editar_eliminar(df, client, sheet_id):
     st.title("Editar / Eliminar Evento")
-
     if df.empty:
-        st.info("No hay eventos.")
+        st.info("No hay eventos registrados.")
         return
     st.dataframe(df)
 
@@ -195,29 +190,29 @@ def vista_editar_eliminar(df, client, sheet_id):
                 guardar_datos(client, sheet_id, df)
                 st.warning("Evento eliminado.")
 
-
 def vista_mensual(df):
     """
-    Vista Mensual: 
-      - Selecciono año y mes.
-      - Para cada semana, muestro:
-        * "Semana X"
-        * Debajo, la lista de días con sus eventos
-        * Debajo, DOS filas de estado: la primera fila con nombres de plataformas
-          (Instagram, Tiktok...) 
-          la segunda fila con "3/5, 1/2, etc."
+    Vista Mensual:
+      - Seleccionar año y mes.
+      - Para cada semana: Título "Semana X"
+        * Listar cada día con sus eventos
+        * Luego DOS bloques de estado:
+          - Fila 1 => nombres de plataforma
+          - Fila 2 => "3/5, 1/2..." 
     """
-    st.title("Vista Mensual - Semanas en Bloques")
+    st.title("Vista Mensual (Bloques por semana)")
 
     if df.empty:
         st.info("No hay datos.")
         return
 
+    # Seleccionar año y mes
     anios = sorted(df["Fecha"].dropna().dt.year.unique().astype(int))
     if not anios:
-        st.warning("No hay años disponibles.")
+        st.warning("No hay años.")
         return
     anio_sel = st.selectbox("Año", anios)
+
     df_year = df[df["Fecha"].dt.year==anio_sel]
     if df_year.empty:
         st.warning("No hay datos para ese año.")
@@ -232,9 +227,9 @@ def vista_mensual(df):
 
     st.markdown(f"## {NOMBRE_MESES[mes_sel-1]} {anio_sel}")
 
+    # Calculamos cuántos días
     _, ndays = calendar.monthrange(anio_sel, mes_sel)
-
-    # Repartimos semanas => S1 => 1..7, S2 => 8..14 ...
+    # Repartir semanas => 1..7 => S1, 8..14 => S2
     semana_idx = 1
     start_day = 1
     while start_day <= ndays:
@@ -242,8 +237,7 @@ def vista_mensual(df):
         dias_sem = list(range(start_day, end_day+1))
 
         st.subheader(f"Semana {semana_idx}")
-
-        # 1) Lista de fechas con eventos
+        # Listar días
         for d in dias_sem:
             df_day = df_mes[df_mes["Fecha"].dt.day==d]
             if len(df_day)>0:
@@ -256,45 +250,45 @@ def vista_mensual(df):
             else:
                 st.write(f"Día {d} (sin eventos)")
 
-        # 2) DOS filas de estado
+        # Bloque de estado
         df_sem = df_mes[df_mes["Fecha"].dt.day.between(start_day, end_day)]
         if df_sem.empty:
-            # No hay publicaciones
-            st.write("Sin publicaciones en esta semana.")
+            st.write("No hay publicaciones esta semana.")
         else:
-            # Recolectar plataformas
-            plats_en_sem = df_sem["Plataforma"].unique()
-            if len(plats_en_sem)==0:
-                st.write("No hay plataformas en esta semana.")
+            # Extraemos las plataformas
+            plats = df_sem["Plataforma"].unique()
+            if len(plats)==0:
+                st.write("Sin plataformas esta semana.")
             else:
-                # Fila 1 => Nombres de plataformas
+                # Fila 1 => nombres
                 row_plat = []
-                # Fila 2 => Conteo (3/5)
+                # Fila 2 => conteos
                 row_cnt = []
-                for plat in plats_en_sem:
-                    dfp = df_sem[df_sem["Plataforma"]==plat]
-                    total = len(dfp)
-                    publ = len(dfp[dfp["Estado"]=="Publicado"])
-                    row_plat.append(plat)
+                for p in plats:
+                    subsetp = df_sem[df_sem["Plataforma"]==p]
+                    total = len(subsetp)
+                    publ = len(subsetp[subsetp["Estado"]=="Publicado"])
+                    row_plat.append(p)
                     row_cnt.append(f"{publ}/{total}")
-                # Mostramos en la misma linea: IG   Face   TikTok
-                # Y en la siguiente:        3/5  1/2   2/6
+                # Mostramos
                 st.write(" | ".join(row_plat))
                 st.write(" | ".join(row_cnt))
 
         st.write("---")
-        semana_idx += 1
+        semana_idx+=1
         start_day = end_day+1
-
 
 def vista_anual(df):
     """
-    Vista Anual: Estilo calendario-librería,
-    filas = semanas (S1..S5/6),
-    columnas = L..D + 'Estado' al costado,
-    pero con DOS filas dentro del 'Estado': una con nombres (IG, Face, TikTok) y otra con '3/5, 1/2...'
+    Vista Anual estilo librería:
+     - Filas => Semanas (S1..S5)
+     - Columnas => L..D (7 col)
+     - A la derecha, un bloque de estado, con 2 filas: 
+       1) nombres de plataforma
+       2) "3/5, 1/2..."
+     Se hace con contenedores "flex" para que queden alineados horizontalmente.
     """
-    st.title("Vista Anual - Calendario Librería + Estado al costado")
+    st.title("Vista Anual (Calendario librería + Estado al costado)")
 
     if df.empty:
         st.info("No hay datos.")
@@ -302,108 +296,137 @@ def vista_anual(df):
 
     anios = sorted(df["Fecha"].dropna().dt.year.unique().astype(int))
     if not anios:
-        st.warning("No hay años disponibles.")
+        st.warning("No hay años.")
         return
     anio_sel = st.selectbox("Año", anios)
     df_year = df[df["Fecha"].dt.year==anio_sel]
     if df_year.empty:
-        st.warning("No hay datos en ese año.")
+        st.warning("No hay datos para ese año.")
         return
 
     st.markdown(f"## {anio_sel}")
 
-    full_html = []
+    # CSS para "flex" containers
+    st.markdown("""
+    <style>
+    .month-container {
+        margin-bottom: 2rem;
+    }
+    .week-row {
+        display: flex;
+        flex-direction: row;
+        margin-bottom: 0.5rem;
+    }
+    .calendar-cell {
+        border: 1px solid #ccc;
+        min-width: 70px;
+        min-height: 70px;
+        padding: 4px;
+        margin-right: 2px;
+        text-align: left;
+        vertical-align: top;
+    }
+    .calendar-cell-day {
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .week-label {
+        width: 40px;
+        border: 1px solid #ccc;
+        margin-right: 2px;
+        padding: 4px;
+        text-align: center;
+        background-color: #eee;
+    }
+    .state-block {
+        border: 1px solid #ccc;
+        min-width: 100px;
+        padding: 4px;
+        margin-left: 4px;
+        text-align: left;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     for mes in range(1,13):
         df_mes = df_year[df_year["Fecha"].dt.month==mes]
         if df_mes.empty:
             continue
-        # Obtenemos la matriz con monthcalendar => lista de semanas
+
+        st.markdown(f"### {NOMBRE_MESES[mes-1]} {anio_sel}")
+        st.markdown("<div class='month-container'>", unsafe_allow_html=True)
+
+        # Obtenemos las semanas con monthcalendar
         mat = calendar.monthcalendar(anio_sel, mes)
-        # Cada fila => [L, M, X, J, V, S, D], 0 si no corresponde
+        # Cada row = [L, M, X, J, V, S, D]
+        # 0 => no day del mes
 
-        # Generamos una tabla con 1 + 7 + 1 = 9 columnas:
-        # col0 => "S1"
-        # col1..7 => L..D
-        # col8 => Estado (dos filas internas: una de nombres de plataformas, otra con "3/5")
-        # Recorremos las filas => S1..Sx
+        for w_i, week in enumerate(mat):
+            # week-block en flex
+            st.markdown("<div class='week-row'>", unsafe_allow_html=True)
 
-        table_rows = []
-        # Encabezados => 9
-        table_rows.append("""
-        <tr>
-          <th></th>
-          <th>L</th><th>M</th><th>X</th><th>J</th><th>V</th><th>S</th><th>D</th>
-          <th>Estado</th>
-        </tr>
-        """)
+            # 1) Semanal label
+            sem_label = f"S{w_i+1}"
+            st.markdown(f"<div class='week-label'>{sem_label}</div>", unsafe_allow_html=True)
 
-        for w_i,week in enumerate(mat):
-            s_name = f"S{w_i+1}"
-            row_cells = []
-            row_cells.append(f"<td><strong>{s_name}</strong></td>")  # col0
-            day_numbers = []
-            # col1..7 => lunes..domingo
-            for day_of_week in week:  # 0 => no day
-                if day_of_week==0:
-                    row_cells.append("<td></td>")
-                    day_numbers.append(None)
+            # 2) 7 celdas de días
+            day_nums = []
+            day_html = []
+            for d in week:  # monday..sunday
+                if d==0:
+                    # Celda vacía
+                    cell_html = "<div class='calendar-cell'></div>"
+                    day_html.append(cell_html)
+                    day_nums.append(None)
                 else:
-                    # Filtramos df
-                    df_day = df_mes[df_mes["Fecha"].dt.day==day_of_week]
-                    day_text = f"{day_of_week}:<br/>"
+                    # Filtrar df
+                    df_day = df_mes[df_mes["Fecha"].dt.day==d]
+                    content = f"<div class='calendar-cell-day'>Día {d}</div>"
                     if not df_day.empty:
                         for _, rowx in df_day.iterrows():
-                            day_text += f"- {rowx['Titulo']}"
+                            content += f"- {rowx['Titulo']}"
                             if pd.notna(rowx['Festividad']) and rowx['Festividad'].strip():
-                                day_text += f" ({rowx['Festividad']})"
-                            day_text += "<br/>"
-                    row_cells.append(f"<td style='vertical-align:top;'>{day_text}</td>")
-                    day_numbers.append(day_of_week)
+                                content += f" ({rowx['Festividad']})"
+                            content += "<br/>"
+                    cell_html = f"<div class='calendar-cell'>{content}</div>"
+                    day_html.append(cell_html)
+                    day_nums.append(d)
 
-            # col8 => estado, con DOS filas internas
-            valid_days = [d for d in day_numbers if d is not None]
-            if not valid_days:
-                # Sin dias
-                row_cells.append("<td></td>")
+            # 3) Al final "state-block" a la derecha
+            # Calculamos
+            valid_days = [x for x in day_nums if x is not None]
+            if len(valid_days)==0:
+                # Sin días
+                state_str = "<div class='state-block'>No hay días en esta semana.</div>"
             else:
                 df_sem = df_mes[df_mes["Fecha"].dt.day.isin(valid_days)]
                 if df_sem.empty:
-                    row_cells.append("<td>Sin eventos</td>")
+                    state_str = "<div class='state-block'>Sin eventos.</div>"
                 else:
-                    # Agrupamos por plataforma
                     plats = df_sem["Plataforma"].unique()
                     if len(plats)==0:
-                        row_cells.append("<td>Sin eventos</td>")
+                        state_str = "<div class='state-block'>Sin plataformas.</div>"
                     else:
-                        # construimos 2 lineas: 
-                        # 1) "IG | Face | TikTok"
-                        # 2) "3/5 | 1/2 | 2/7"
-                        # Recolectamos en arrays
+                        # Fila1 => nombres, Fila2 => "x/y"
                         row_plat = []
                         row_cnt = []
                         for p in plats:
-                            subp = df_sem[df_sem["Plataforma"]==p]
-                            total = len(subp)
-                            publ = len(subp[subp["Estado"]=="Publicado"])
+                            subsetp = df_sem[df_sem["Plataforma"]==p]
+                            total = len(subsetp)
+                            publ = len(subsetp[subsetp["Estado"]=="Publicado"])
                             row_plat.append(p)
                             row_cnt.append(f"{publ}/{total}")
-
                         line1 = " | ".join(row_plat)
                         line2 = " | ".join(row_cnt)
-                        td_content = f"{line1}<br/>{line2}"
-                        row_cells.append(f"<td style='vertical-align:top;'>{td_content}</td>")
+                        state_str = f"<div class='state-block'>{line1}<br/>{line2}</div>"
 
-            table_rows.append("<tr>" + "".join(row_cells) + "</tr>")
+            # Unimos
+            row_html = "".join(day_html) + state_str
+            st.markdown(row_html, unsafe_allow_html=True)
 
-        # Armamos la tabla
-        table_html = []
-        table_html.append(f"<h3>{NOMBRE_MESES[mes-1]} {anio_sel}</h3>")
-        table_html.append("<table border='1' style='border-collapse:collapse; width:100%;'>")
-        table_html.append("".join(table_rows))
-        table_html.append("</table>")
-        full_html.append("".join(table_html))
+            st.markdown("</div>", unsafe_allow_html=True)  # fin .week-row
 
-    st.markdown("<div style='width:100%'>" + "".join(full_html) + "</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)  # fin .month-container
 
 
 def main():
@@ -426,6 +449,7 @@ def main():
     if st.sidebar.button("Vista Anual", key="side_anual"):
         st.session_state["page"] = "Anual"
 
+    # Ruta
     page = st.session_state["page"]
     if page=="Dashboard":
         dashboard(df)
@@ -440,3 +464,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
