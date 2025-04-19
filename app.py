@@ -1,445 +1,450 @@
+# ======================================================
+# CALENDARIO DE CONTENIDOS – v3.1  (17‑Abr‑2025)
+# ------------------------------------------------------
+# * Botón Cerrar integrado en el modal (visible y útil)
+# * El modal sólo muestra Título, Plataforma y Estado
+# ======================================================
+
 import streamlit as st
 import pandas as pd
-import json
-import gspread
+import json, gspread, datetime, calendar, unicodedata
 from oauth2client.service_account import ServiceAccountCredentials
-import datetime
-import calendar
+import plotly.express as px
 
-# -----------------------------------------------------------------
-# st.set_page_config debe ser el PRIMER comando de Streamlit
-# -----------------------------------------------------------------
+# ---------- CONFIG BÁSICA ----------
 st.set_page_config(page_title="Calendario de Contenidos", layout="wide")
 
-# -----------------------------------------------------------------
-# CONSTANTES Y HOJAS
-# -----------------------------------------------------------------
-DATA_SHEET = "Data"        # Hoja donde se almacenan los eventos
-CONFIG_SHEET = "Config"    # Hoja donde se guarda la configuración de redes
-COLUMNS = ["Fecha", "Titulo", "Festividad", "Plataforma", "Estado", "Notas"]
-NOMBRE_MESES = [
-    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
-]
-# Redes predeterminadas; en Config se pueden agregar otras
-REDES_PREDEFINIDAS = ["Instagram", "Facebook", "TikTok", "Blog"]
+DATA_SHEET   = "Data"
+CONFIG_SHEET = "Config"
+COLUMNS      = ["Fecha","Titulo","Festividad","Plataforma","Estado","Notas"]
+MESES        = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio",
+                "Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+REDES_PREDEFINIDAS = ["Instagram","Facebook","TikTok","Blog","Twitter"]
 
-# -----------------------------------------------------------------
-# CONEXIÓN CON GOOGLE SHEETS
-# -----------------------------------------------------------------
+# ---------- CSS ----------
+st.markdown("""
+<style>
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;
+       background:rgba(0,0,0,.55);display:flex;justify-content:center;
+       align-items:center;z-index:1000}
+.modal-content{background:#fff;padding:24px 32px;border-radius:8px;
+               max-width:700px;width:90%;max-height:85vh;overflow-y:auto;
+               box-shadow:0 4px 10px rgba(0,0,0,.25)}
+.stButton>button{margin-top:18px}
+</style>
+""", unsafe_allow_html=True)
+
+# ---------- UTILIDADES ----------
+def norm(t:str)->str:
+    if not isinstance(t,str): return ""
+    return "".join(c for c in unicodedata.normalize("NFD",t.replace("\u00a0"," "))
+                   if unicodedata.category(c)!="Mn").lower().strip()
+
+def status_html(p:int,r:int)->str:
+    txt=f"{p}/{r}"
+    if p==0:        return f"<span style='color:red'>{txt}</span>"
+    if p>=r:        return f"<span style='color:green;font-weight:700'>{txt}</span>"
+    if p>r/2:       return f"<span style='color:blue'>{txt}</span>"
+    return txt
+
 def get_gsheet_connection():
-    cred_json_str = st.secrets["gcp_service_account"]
-    creds_dict = json.loads(cred_json_str)
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(credentials)
+    creds=json.loads(st.secrets["gcp_service_account"])
+    scope=["https://www.googleapis.com/auth/spreadsheets",
+           "https://www.googleapis.com/auth/drive"]
+    return gspread.authorize(
+        ServiceAccountCredentials.from_json_keyfile_dict(creds,scope))
 
-# -----------------------------------------------------------------
-# Funciones Cacheadas (se ignoran _client para evitar hashing)
-# Se especifica hash_funcs para que no intente hashear el objeto Client
-# -----------------------------------------------------------------
-@st.cache_data(ttl=60, hash_funcs={gspread.client.Client: lambda _: None})
-def cargar_datos_cached(_client, sheet_id):
-    sh = _client.open_by_key(sheet_id)
-    try:
-        ws = sh.worksheet(DATA_SHEET)
+@st.cache_data(ttl=60,hash_funcs={gspread.client.Client:lambda _:None})
+def load_df(cli,shid):
+    sh=cli.open_by_key(shid)
+    try: ws=sh.worksheet(DATA_SHEET)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=DATA_SHEET, rows="1000", cols="20")
-        ws.append_row(COLUMNS)
-        return pd.DataFrame(columns=COLUMNS)
-    data = ws.get_all_records()
-    if not data:
-        return pd.DataFrame(columns=COLUMNS)
-    df = pd.DataFrame(data)
-    if "Fecha" in df.columns:
-        df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
+        ws=sh.add_worksheet(title=DATA_SHEET,rows="1000",cols="20")
+        ws.append_row(COLUMNS); return pd.DataFrame(columns=COLUMNS)
+    df=pd.DataFrame(ws.get_all_records())
+    df["Fecha"]=pd.to_datetime(df["Fecha"],errors="coerce")
+    for c in ["Plataforma","Estado"]:
+        df[c]=df[c].astype(str).str.replace("\u00a0"," ").str.strip()
+    df["Plataforma_norm"]=df["Plataforma"].apply(norm)
+    df["Estado_norm"]     =df["Estado"].apply(norm)
     return df
 
-@st.cache_data(ttl=60, hash_funcs={gspread.client.Client: lambda _: None})
-def cargar_config_cached(_client, sheet_id):
-    sh = _client.open_by_key(sheet_id)
-    try:
-        ws = sh.worksheet(CONFIG_SHEET)
+@st.cache_data(ttl=60,hash_funcs={gspread.client.Client:lambda _:None})
+def load_cfg(cli,shid):
+    sh=cli.open_by_key(shid)
+    try: ws=sh.worksheet(CONFIG_SHEET)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=CONFIG_SHEET, rows="10", cols="5")
-        default_data = [
-            ["Red", "Requerido"],
-            ["Instagram", "5"],
-            ["Facebook", "5"],
-            ["TikTok", "3"],
-            ["Blog", "1"]
-        ]
-        ws.update("A1", default_data)
-        return {"Instagram": 5, "Facebook": 5, "TikTok": 3, "Blog": 1}
-    data = ws.get_all_values()
-    if len(data) < 2:
-        return {}
-    config_dict = {}
-    for row in data[1:]:
-        if len(row) >= 2 and row[0].strip() != "" and row[1].strip() != "":
-            try:
-                config_dict[row[0].strip()] = int(row[1])
-            except:
-                config_dict[row[0].strip()] = 0
-    return config_dict
+        ws=sh.add_worksheet(title=CONFIG_SHEET,rows="10",cols="5")
+        ws.update("A1",[["Red","Requerido"],
+                        ["Instagram","5"],["Facebook","5"],
+                        ["TikTok","3"],["Blog","1"]])
+    return {r[0]:int(r[1]) if len(r)>1 and r[1].isdigit() else 0
+            for r in ws.get_all_values()[1:]}
 
-def guardar_datos(client, sheet_id, df):
-    sh = client.open_by_key(sheet_id)
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-    df = df[COLUMNS]
-    df["Fecha"] = df["Fecha"].astype(str)
-    data_to_upload = [df.columns.tolist()] + df.values.tolist()
-    try:
-        ws = sh.worksheet(DATA_SHEET)
+def guardar_datos(cli,shid,df):
+    sh=cli.open_by_key(shid)
+    out=df[COLUMNS].copy(); out["Fecha"]=out["Fecha"].astype(str)
+    data=[out.columns.tolist()]+out.values.tolist()
+    try: ws=sh.worksheet(DATA_SHEET)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=DATA_SHEET, rows="1000", cols="20")
+        ws=sh.add_worksheet(title=DATA_SHEET,rows="1000",cols="20")
+    ws.clear(); ws.update("A1",data); st.cache_data.clear()
+
+def guardar_config(cli,shid,cfg):
+    sh=cli.open_by_key(shid)
+    try: ws=sh.worksheet(CONFIG_SHEET)
+    except gspread.exceptions.WorksheetNotFound:
+        ws=sh.add_worksheet(title=CONFIG_SHEET,rows="10",cols="5")
     ws.clear()
-    ws.update("A1", data_to_upload)
-    # Limpiar caché para que se recargue la data
+    ws.update("A1",[["Red","Requerido"]]+[[k,str(v)] for k,v in cfg.items()])
     st.cache_data.clear()
 
-def guardar_config(client, sheet_id, config_dict):
-    sh = client.open_by_key(sheet_id)
-    try:
-        ws = sh.worksheet(CONFIG_SHEET)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=CONFIG_SHEET, rows="10", cols="5")
-    data = [["Red", "Requerido"]]
-    for red, req in config_dict.items():
-        data.append([red, str(req)])
-    ws.clear()
-    ws.update("A1", data)
-    st.cache_data.clear()
+# ---------- DASHBOARD ----------
+def weeks_in_year(yr: int) -> int:
+    """Número ISO‑semanas reales de un año (52 o 53)."""
+    yr = int(yr)                          # evita floats tipo 2025.0
+    return datetime.date(yr, 12, 28).isocalendar().week  # 28‑dic siempre cae en la última semana ISO
 
-# -----------------------------------------------------------------
-# PÁGINAS DE LA APP
-# -----------------------------------------------------------------
-def dashboard(df):
-    st.title("Dashboard - Calendario de Contenidos")
-    st.markdown("""
-**Bienvenido(a)** a tu Calendario de Contenidos.
-- **Agregar Evento**: Crea nuevos eventos.
-- **Editar/Eliminar Evento**: Modifica o elimina eventos.
-- **Vista Mensual**: Visualiza un mes agrupado por semanas.
-- **Vista Anual**: Muestra un calendario anual estilo librería con estados.
-- **Configuración**: Ajusta la cantidad requerida de publicaciones por red.
-    """)
-    # Usar columnas con claves únicas para cada botón
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        if st.button("Agregar Evento", key="dashboard_agregar_btn"):
-            st.session_state["page"] = "Agregar"
-    with col2:
-        if st.button("Editar/Eliminar Evento", key="dashboard_editar_btn"):
-            st.session_state["page"] = "Editar"
-    with col3:
-        if st.button("Vista Mensual", key="dashboard_mensual_btn"):
-            st.session_state["page"] = "Mensual"
-    with col4:
-        if st.button("Vista Anual", key="dashboard_anual_btn"):
-            st.session_state["page"] = "Anual"
-    with col5:
-        if st.button("Configuración", key="dashboard_config_btn"):
-            st.session_state["page"] = "Config"
+
+def dashboard(df: pd.DataFrame, cfg: dict):
+    st.title("Dashboard – Calendario de Contenidos")
+
+    # -------- Navegación rápida
+    cols = st.columns(5)
+    for i, (lbl, pg) in enumerate(
+        [("Agregar Evento", "Agregar"),
+         ("Editar/Eliminar", "Editar"),
+         ("Vista Mensual", "Mensual"),
+         ("Vista Anual", "Anual"),
+         ("Configuración", "Config")]
+    ):
+        if cols[i].button(lbl, key=f"dash_{pg}"):
+            st.session_state["page"] = pg
+
     st.write("---")
-    st.metric("Total de eventos", len(df))
-    if not df.empty and "Estado" in df.columns:
-        st.subheader("Conteo de Estados")
-        for est, cnt in df["Estado"].value_counts().items():
-            st.write(f"- **{est}**: {cnt}")
-    else:
-        st.info("No hay datos o falta la columna 'Estado'.")
 
-def vista_agregar(df, client, sheet_id):
+    # -------- Año a analizar
+    years = sorted({int(y) for y in df["Fecha"].dt.year.dropna()})
+    if not years:
+        st.warning("No hay años disponibles para visualizar.")
+        return
+
+    hoy = datetime.date.today().year
+    default_idx = years.index(hoy) if hoy in years else 0
+    yr = int(st.selectbox("Año a visualizar", years, index=default_idx))
+
+    df_yr = df[df["Fecha"].dt.year == yr]
+    wks   = weeks_in_year(yr)
+
+    # -------- KPI global
+    objetivo_total = sum(v * wks for v in cfg.values())
+    planeado_total = len(df_yr)
+
+    st.metric("⏱️ Eventos planificados / objetivo anual",
+              f"{planeado_total}/{objetivo_total}",
+              delta=f"{planeado_total - objetivo_total}")
+
+    # -------- Conteo por ESTADO (planificado vs objetivo anual)
+    vc_estado = df_yr["Estado"].value_counts().reindex(
+        ["Planeación", "Diseño", "Programado", "Publicado"], fill_value=0
+    )
+    st.subheader("Conteo por estado (año seleccionado)")
+    st.dataframe(vc_estado.rename("Planificados").to_frame())
+
+    # -------- Conteo POR RED (planificado vs objetivo anual)
+    st.subheader("Planificado vs objetivo por red social")
+    cols = st.columns(len(cfg))
+    for i, red in enumerate(sorted(cfg)):
+        objetivo = cfg[red] * wks
+        planeado = len(
+            df_yr[df_yr["Plataforma_norm"].str.contains(norm(red), na=False)]
+        )
+        cols[i].metric(red, f"{planeado}/{objetivo}")
+
+    # -------- Pie de estados
+    fig = px.pie(
+        values=vc_estado.values,
+        names=vc_estado.index,
+        title=f"Distribución de estados – {yr}",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ---------- AGREGAR / EDITAR / MENÚ / CONFIG (igual que 3.0) ----------
+def vista_agregar(df,cli,sheet_id):
     st.title("Agregar Evento")
-    with st.form("form_agregar", clear_on_submit=True):
-        fecha = st.date_input("Fecha", datetime.date.today(), key="agregar_fecha")
-        titulo = st.text_input("Título", "", key="agregar_titulo")
-        festividad = st.text_input("Festividad/Efeméride", "", key="agregar_festividad")
-        plataforma = st.selectbox("Plataforma", REDES_PREDEFINIDAS + ["Otra"], key="agregar_plataforma")
-        estado = st.selectbox("Estado", ["Planeación", "Diseño", "Programado", "Publicado"], key="agregar_estado")
-        notas = st.text_area("Notas", "", key="agregar_notas")
-        if st.form_submit_button("Guardar Evento", key="form_btn_guardar_agregar"):
-            nuevo = {
-                "Fecha": fecha,
-                "Titulo": titulo,
-                "Festividad": festividad,
-                "Plataforma": plataforma,
-                "Estado": estado,
-                "Notas": notas
-            }
-            df = pd.concat([df, pd.DataFrame([nuevo])], ignore_index=True)
-            guardar_datos(client, sheet_id, df)
-            st.success("Evento agregado con éxito.")
+    default_date=datetime.date.today()
+    sel=st.session_state.get("selected_date")
+    if isinstance(sel,datetime.date): default_date=sel
+    with st.form("f_add",clear_on_submit=True):
+        fecha=st.date_input("Fecha",default_date)
+        titulo=st.text_input("Título","")
+        festividad=st.text_input("Festividad/Efeméride","")
+        plataforma=st.selectbox("Plataforma",REDES_PREDEFINIDAS+["Otra"])
+        estado=st.selectbox("Estado",["Planeación","Diseño","Programado","Publicado"])
+        notas=st.text_area("Notas","")
+        if st.form_submit_button("Guardar Evento"):
+            nuevo={"Fecha":pd.Timestamp(fecha),"Titulo":titulo.strip(),
+                   "Festividad":festividad.strip(),"Plataforma":plataforma.strip(),
+                   "Estado":estado.strip(),"Notas":notas.strip()}
+            df=pd.concat([df,pd.DataFrame([nuevo])],ignore_index=True)
+            guardar_datos(cli,sheet_id,df); st.success("¡Evento agregado!")
 
-def vista_editar_eliminar(df, client, sheet_id):
-    st.title("Editar/Eliminar Evento")
-    if df.empty:
-        st.info("No hay eventos registrados.")
-        return
-    st.dataframe(df)
-    idxs = df.index.tolist()
-    if not idxs:
-        return
-    sel_idx = st.selectbox("Selecciona la fila a modificar", idxs, key="editar_select_idx")
-    row = df.loc[sel_idx]
-    with st.form("form_editar", clear_on_submit=True):
-        fecha_e = st.date_input("Fecha", value=row["Fecha"] if pd.notna(row["Fecha"]) else datetime.date.today(), key="editar_fecha")
-        titulo_e = st.text_input("Título", value=row["Titulo"], key="editar_titulo")
-        festividad_e = st.text_input("Festividad/Efeméride", value=row["Festividad"], key="editar_festividad")
-        plat_options = REDES_PREDEFINIDAS + ["Otra"]
-        idx_plat = plat_options.index(row["Plataforma"]) if row["Plataforma"] in plat_options else 0
-        plat_e = st.selectbox("Plataforma", plat_options, index=idx_plat, key="editar_plataforma")
-        estados = ["Planeación", "Diseño", "Programado", "Publicado"]
-        idx_est = estados.index(row["Estado"]) if row["Estado"] in estados else 0
-        est_e = st.selectbox("Estado", estados, index=idx_est, key="editar_estado")
-        notas_e = st.text_area("Notas", value=row["Notas"], key="editar_notas")
-        c1, c2 = st.columns(2)
+def vista_editar_eliminar(df,cli,sheet_id):
+    st.title("Editar / Eliminar Evento")
+    if df.empty: st.info("No hay eventos registrados."); return
+    st.dataframe(df,use_container_width=True)
+    idx=st.selectbox("Fila",df.index.tolist())
+    row=df.loc[idx]
+    with st.form("f_edit",clear_on_submit=True):
+        fecha=st.date_input("Fecha",row["Fecha"].date())
+        titulo=st.text_input("Título",row["Titulo"])
+        festividad=st.text_input("Festividad/Efeméride",row["Festividad"])
+        plat_opts=REDES_PREDEFINIDAS+["Otra"]
+        plataforma=st.selectbox("Plataforma",plat_opts,
+                     index=plat_opts.index(row["Plataforma"]
+                           if row["Plataforma"] in plat_opts else "Otra"))
+        estados=["Planeación","Diseño","Programado","Publicado"]
+        estado=st.selectbox("Estado",estados,
+                index=estados.index(row["Estado"]) if row["Estado"] in estados else 0)
+        notas=st.text_area("Notas",row["Notas"])
+        c1,c2=st.columns(2)
         with c1:
-            if st.form_submit_button("Guardar Cambios", key="form_btn_guardar_editar"):
-                df.at[sel_idx, "Fecha"] = fecha_e
-                df.at[sel_idx, "Titulo"] = titulo_e
-                df.at[sel_idx, "Festividad"] = festividad_e
-                df.at[sel_idx, "Plataforma"] = plat_e
-                df.at[sel_idx, "Estado"] = est_e
-                df.at[sel_idx, "Notas"] = notas_e
-                guardar_datos(client, sheet_id, df)
-                st.success("Cambios guardados!")
+            if st.form_submit_button("Guardar Cambios"):
+                df.loc[idx]=[pd.Timestamp(fecha),titulo,festividad,plataforma,estado,notas,
+                             norm(plataforma),norm(estado)]
+                guardar_datos(cli,sheet_id,df); st.success("¡Guardado!")
         with c2:
-            if st.form_submit_button("Borrar Evento", key="form_btn_borrar_editar"):
-                df.drop(index=sel_idx, inplace=True)
-                df.reset_index(drop=True, inplace=True)
-                guardar_datos(client, sheet_id, df)
-                st.warning("Evento eliminado.")
+            if st.form_submit_button("Borrar Evento"):
+                df.drop(index=idx,inplace=True); df.reset_index(drop=True,inplace=True)
+                guardar_datos(cli,sheet_id,df); st.warning("Eliminado"); st.rerun()
 
-def vista_configuracion(client, sheet_id):
-    st.title("Configuración - Redes Sociales")
-    st.markdown("Define la cantidad requerida de publicaciones semanales para cada red social.")
-    config = cargar_config_cached(client, sheet_id)
-    if not config:
-        config = {"Instagram": 5, "Facebook": 5, "TikTok": 3, "Blog": 1}
-    nuevos_config = {}
-    st.markdown("### Redes Configuradas")
-    for red in sorted(config.keys()):
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.write(f"**{red}**:")
-        with col2:
-            valor = st.number_input(f"Requerido para {red}", min_value=0, value=int(config[red]), key=f"config_{red}_num")
-            nuevos_config[red] = valor
-    st.markdown("### Agregar Nueva Red")
-    red_nueva = st.text_input("Nueva Red (deja vacío si no)", key="config_nueva_red")
-    if red_nueva.strip() != "":
-        nuevo_valor = st.number_input(f"Requerido para {red_nueva}", min_value=0, value=1, key="config_nueva_red_num")
-        nuevos_config[red_nueva.strip()] = nuevo_valor
-    if st.button("Guardar Configuración", key="btn_guardar_config"):
-        guardar_config(client, sheet_id, nuevos_config)
-        st.success("Configuración actualizada.")
+def vista_configuracion(cli,sheet_id):
+    st.title("Configuración – Redes Sociales")
+    cfg=load_cfg(cli,sheet_id)
+    nuevos={}
+    for red in sorted(cfg):
+        c1,c2=st.columns([2,1]); c1.write(f"**{red}**")
+        nuevos[red]=c2.number_input("",value=cfg[red],min_value=0,key=f"cfg_{red}")
+    st.markdown("### Nueva red social")
+    nueva=st.text_input("Nombre nueva red").strip()
+    if nueva:
+        req=st.number_input("Requerido",min_value=0,value=1)
+        nuevos[nueva]=req
+    if st.button("Guardar"):
+        guardar_config(cli,sheet_id,nuevos); st.success("¡Configuración guardada!")
 
-def vista_mensual(df, config):
-    st.title("Vista Mensual - Semanas")
-    anio_actual = datetime.date.today().year
-    años = list(range(anio_actual - 10, anio_actual + 11))
-    anio_sel = st.selectbox("Año", años, index=años.index(anio_actual), key="mensual_anio_sel")
-    df_year = df[df["Fecha"].dt.year == anio_sel]
-    if df_year.empty:
-        st.warning("No hay datos para ese año.")
-        return
-    meses_disp = sorted(df_year["Fecha"].dt.month.unique().astype(int))
-    mes_sel = st.selectbox("Mes", meses_disp, format_func=lambda m: NOMBRE_MESES[m - 1], key="mensual_mes_sel")
-    df_mes = df_year[df_year["Fecha"].dt.month == mes_sel]
-    if df_mes.empty:
-        st.warning("No hay datos para este mes.")
+def vista_mensual(df: pd.DataFrame, cfg: dict):
+    st.title("Vista Mensual – Semanas")
+
+    # --- Selector de fecha
+    anio = st.selectbox("Año",
+        list(range(datetime.date.today().year - 10,
+                   datetime.date.today().year + 11)),
+        index=10)
+    df_y = df[df["Fecha"].dt.year == anio]
+    if df_y.empty:
+        st.warning("Sin datos para ese año.")
         return
 
-    st.markdown(f"## {NOMBRE_MESES[mes_sel - 1]} {anio_sel}")
-    _, ndays = calendar.monthrange(anio_sel, mes_sel)
-    semana_idx = 1
-    start_day = 1
-    while start_day <= ndays:
-        end_day = min(start_day + 6, ndays)
-        dias_sem = range(start_day, end_day + 1)
-        st.subheader(f"Semana {semana_idx}")
-        # Listado de días y eventos:
-        for d in dias_sem:
-            df_day = df_mes[df_mes["Fecha"].dt.day == d]
-            if df_day.empty:
-                st.write(f"Día {d}: (sin eventos)")
+    meses = sorted(df_y["Fecha"].dt.month.unique())
+    mes = st.selectbox("Mes", meses, format_func=lambda m: MESES[m-1])
+    df_m = df_y[df_y["Fecha"].dt.month == mes]
+    if df_m.empty:
+        st.warning("Sin datos para ese mes.")
+        return
+
+    st.markdown(f"## {MESES[mes-1]} {anio}")
+
+    ndays = calendar.monthrange(anio, mes)[1]
+    weekday = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+
+    semana, d = 1, 1
+    while d <= ndays:
+        fin = min(d + 6, ndays)
+        dias = list(range(d, fin + 1))
+        st.subheader(f"Semana {semana}")
+
+        # --- Días
+        for day in dias:
+            fecha = datetime.date(anio, mes, day)
+            st.markdown(f"**{weekday[fecha.weekday()]} {day}:**")
+
+            df_d = df_m[df_m["Fecha"].dt.day == day]
+            if df_d.empty:
+                st.markdown("- (vacío)")
             else:
-                events = []
-                for _, row in df_day.iterrows():
-                    ev = f"{row['Titulo']}"
-                    if pd.notna(row['Festividad']) and row['Festividad'].strip():
-                        ev += f" ({row['Festividad']})"
-                    events.append(ev)
-                st.write(f"Día {d}: " + " | ".join(events))
-        # Barra de estado: cada red en columna (mismos tamaños)
-        st.markdown("**Estado de la Semana:**")
-        df_semana = df_mes[df_mes["Fecha"].dt.day.between(start_day, end_day)]
-        cols_state = st.columns(len(config))
-        # Orden de redes según configuración (por orden alfabético)
-        redes_orden = sorted(config.keys())
-        for i, r in enumerate(redes_orden):
-            df_r = df_semana[df_semana["Plataforma"].str.strip().str.lower() == r.strip().lower()]
-            # Contar los “planeados”: estado que no sea "publicado"
-            planeado = len(df_r[df_r["Estado"].str.strip().str.lower() != "publicado"])
-            requerido = config[r]
-            cnt_str = f"{planeado}/{requerido}"
-            if planeado == 0:
-                cnt_str = f"<span style='color:red'>{cnt_str}</span>"
-            with cols_state[i]:
-                st.markdown(f"<div style='text-align:center'><strong>{r}</strong></div>", unsafe_allow_html=True)
-                st.markdown(f"<div style='text-align:center'>{cnt_str}</div>", unsafe_allow_html=True)
+
+
+                ### ---------- TABLA COMPACTA AJUSTADA ----------
+                mini = (
+                    df_d[["Titulo", "Plataforma", "Estado"]]
+                    .rename(columns={"Titulo": "Título"})
+                )
+
+                st.markdown(
+                    """
+                    <style>
+                    /* Contenedor del DataFrame → ancho al mínimo y pegado a la derecha */
+                    div[data-testid="stDataFrame"]{
+                        width:fit-content !important;
+                        margin-left:auto;        /* empuja a la derecha */
+                    }
+                    /* columnas Plataforma y Estado: texto alineado a la derecha + nowrap */
+                    div[data-testid="stDataFrame"] tbody tr td:nth-last-child(-n+2){
+                        text-align:right !important;
+                        white-space:nowrap !important;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                st.dataframe(
+                    mini,
+                    hide_index=True,
+                    use_container_width=False,   # ← dejamos que el CSS decida
+                    column_config={
+                        "Título":     st.column_config.TextColumn(width="large"),
+                        "Plataforma": st.column_config.TextColumn(width="small"),
+                        "Estado":     st.column_config.TextColumn(width="small"),
+                    },
+                )
+                ### ----------------------------------------------
+
+
+        # --- Estado semanal por red
+        st.markdown("**Estado de la semana:**")
+        cols = st.columns(len(cfg))
+        for i, red in enumerate(sorted(cfg)):
+            rn = norm(red)
+            pend = len(df_m[
+                (df_m["Fecha"].dt.day.isin(dias)) &
+                (df_m["Plataforma_norm"].str.contains(rn, na=False)) &
+                (df_m["Estado_norm"] != "publicado")
+            ])
+            cols[i].markdown(
+                f"<div style='text-align:center'><strong>{red}</strong><br/>{status_html(pend, cfg[red])}</div>",
+                unsafe_allow_html=True
+            )
         st.write("---")
-        semana_idx += 1
-        start_day = end_day + 1
+        semana += 1
+        d = fin + 1
 
-def vista_anual(df, config):
-    st.title("Vista Anual - Calendario Librería + Estado")
-    anio_actual = datetime.date.today().year
-    años = list(range(anio_actual - 10, anio_actual + 11))
-    anio_sel = st.selectbox("Año", años, index=años.index(anio_actual), key="anual_anio_sel")
-    df_year = df[df["Fecha"].dt.year == anio_sel]
-    if df_year.empty:
-        st.warning("No hay datos para ese año.")
+
+# ---------- VISTA ANUAL (botón dentro del modal) ----------
+def vista_anual(df: pd.DataFrame, cfg: dict):
+    st.title("Vista Anual – Calendario")
+    yr = st.selectbox("Año",
+        list(range(datetime.date.today().year - 10,
+                   datetime.date.today().year + 11)), index=10)
+
+    year_df = df[df["Fecha"].dt.year == yr]
+    if year_df.empty:
+        st.info("Sin datos para este año.")
         return
-    st.markdown(f"## {anio_sel}")
 
-    st.markdown("""
-    <style>
-    table.anual-cal {
-        border-collapse: collapse;
-        width: 100%;
-        table-layout: fixed;
-    }
-    table.anual-cal td, table.anual-cal th {
-        border: 1px solid #ccc;
-        padding: 4px;
-        vertical-align: middle;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .state-cell {
-        width: 120px;
-        text-align: center;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # Obtener la fecha seleccionada
+    sel = st.session_state.get("selected_date")
+    if isinstance(sel, str):
+        try:
+            sel = datetime.date.fromisoformat(sel)
+        except ValueError:
+            sel = None
+        st.session_state["selected_date"] = sel
 
-    full_html = []
-    for mes in range(1, 13):
-        df_mes = df_year[df_year["Fecha"].dt.month == mes]
-        if df_mes.empty:
-            continue
-        month_html = [f"<h3>{NOMBRE_MESES[mes-1]} {anio_sel}</h3>"]
-        month_html.append("<table class='anual-cal'>")
-        # Encabezado: columna vacía para Sx, 7 para días y 1 para Estado
-        month_html.append("""
-        <tr>
-           <th style="width:40px;"></th>
-           <th>L</th>
-           <th>M</th>
-           <th>X</th>
-           <th>J</th>
-           <th>V</th>
-           <th>S</th>
-           <th>D</th>
-           <th class="state-cell">Estado</th>
-        </tr>
-        """)
-        mat = calendar.monthcalendar(anio_sel, mes)
-        for w_i, week in enumerate(mat):
-            s_label = f"S{w_i+1}"
-            row_html = f"<tr><td style='text-align:center;background:#eee;'>{s_label}</td>"
-            day_nums = []
-            for d in week:
-                if d == 0:
-                    row_html += "<td></td>"
-                    day_nums.append(None)
-                else:
-                    df_day = df_mes[df_mes["Fecha"].dt.day == d]
-                    content = f"<strong>{d}</strong> - "
-                    if not df_day.empty:
-                        # Se muestran solo los títulos (truncados)
-                        events = []
-                        for _, rowx in df_day.iterrows():
-                            ev = f"{rowx['Titulo']}"
-                            if pd.notna(rowx['Festividad']) and rowx['Festividad'].strip():
-                                ev += f"({rowx['Festividad']})"
-                            events.append(ev)
-                        content += " | ".join(events)
-                    else:
-                        content += "Sin eventos"
-                    row_html += f"<td>{content}</td>"
-                    day_nums.append(d)
-            # Columna de estado
-            valid_days = [d for d in day_nums if d is not None]
-            if not valid_days:
-                state_html = "-"
+    # ---------- MODAL ----------
+    if isinstance(sel, datetime.date):
+        dfe = year_df[year_df["Fecha"].dt.date == sel]
+
+        # Mostrar ventana emergente con eventos del día
+        with st.container():
+            st.markdown(f"### Eventos del {sel.strftime('%d/%m/%Y')}")
+            if dfe.empty:
+                st.info("No hay eventos para este día.")
             else:
-                df_sem = df_mes[df_mes["Fecha"].dt.day.isin(valid_days)]
-                redes = sorted(config.keys())
-                state_parts = []
-                for r in redes:
-                    df_r = df_sem[df_sem["Plataforma"].str.strip().str.lower() == r.strip().lower()]
-                    planeado = len(df_r[df_r["Estado"].str.strip().str.lower() != "publicado"])
-                    req = config[r]
-                    cnt_str = f"{planeado}/{req}"
-                    if planeado == 0:
-                        cnt_str = f"<span style='color:red'>{cnt_str}</span>"
-                    state_parts.append(f"{r}: {cnt_str}")
-                state_html = " <br/> ".join(state_parts)
-            row_html += f"<td class='state-cell'>{state_html}</td></tr>"
-            month_html.append(row_html)
-        month_html.append("</table>")
-        full_html.append("".join(month_html))
-    st.markdown("".join(full_html), unsafe_allow_html=True)
+                for _, ev in dfe.iterrows():
+                    st.markdown(f"""
+                    - **Título:** {ev['Titulo']}  
+                    - **Plataforma:** {ev['Plataforma']}  
+                    - **Estado:** {ev['Estado']}  
+                    """)
 
-# -----------------------------------------------------------------
-# FUNCIÓN PRINCIPAL DE LA APP
-# -----------------------------------------------------------------
+            # Botón "Cerrar" para volver a la vista anual
+            if st.button("Cerrar", key="close_modal"):
+                st.session_state["selected_date"] = None
+                st.rerun()  # Recargar la página para volver a la vista anual
+
+        return  # Detener la ejecución para no mostrar el calendario
+
+    # ---------- CALENDARIO ----------
+    for mes in range(1, 13):
+        mdf = year_df[year_df["Fecha"].dt.month == mes]
+        st.markdown(f"### {MESES[mes-1]} {yr}")
+
+        # Encabezado del calendario
+        head = st.columns(9)
+        head[0].markdown("**Semana**")
+        for i, d in enumerate(["L", "M", "X", "J", "V", "S", "D"]):
+            head[i + 1].markdown(f"**{d}**")
+        head[8].markdown("**Estado**")
+
+        # Filas del calendario
+        for wnum, week in enumerate(calendar.monthcalendar(yr, mes), start=1):
+            row = st.columns(9)
+            row[0].markdown(f"**S{wnum}**")
+            valid = []
+            for i, d in enumerate(week):
+                if d == 0:
+                    row[i + 1].markdown("")
+                    continue
+                valid.append(d)
+                if row[i + 1].button(str(d), key=f"{yr}-{mes}-{d}"):
+                    st.session_state["selected_date"] = datetime.date(yr, mes, d)
+                    st.rerun()
+
+            # Barra de estado semanal
+            if valid:
+                wdf = mdf[mdf["Fecha"].dt.day.isin(valid)]
+                partes = []
+                for red in sorted(cfg):
+                    pend = len(wdf[
+                        (wdf["Plataforma_norm"].str.contains(norm(red), na=False)) &
+                        (wdf["Estado_norm"] != "publicado")
+                    ])
+                    partes.append(f"{red}: {status_html(pend, cfg[red])}")
+                estado = "<br>".join(partes)
+            else:
+                estado = "-"
+            row[8].markdown(estado, unsafe_allow_html=True)
+
+
+# ---------- MAIN ----------
 def main():
-    if "page" not in st.session_state:
-        st.session_state["page"] = "Dashboard"
+    params = st.query_params
+    if "page" in params:  st.session_state["page"] = params["page"][0]
+    if "fecha" in params: st.session_state["selected_date"] = params["fecha"][0]
+    st.session_state.setdefault("page", "Dashboard")
 
-    client = get_gsheet_connection()
-    sheet_id = st.secrets["SHEET_ID"]
-    df = cargar_datos_cached(client, sheet_id)
-    config_dict = cargar_config_cached(client, sheet_id)
+    cli = get_gsheet_connection()
+    SHEET_ID = st.secrets["SHEET_ID"]
+    df  = load_df(cli, SHEET_ID)
+    cfg = load_cfg(cli, SHEET_ID)
 
     st.sidebar.title("Navegación")
-    if st.sidebar.button("Dashboard", key="sidebar_dashboard"):
-        st.session_state["page"] = "Dashboard"
-    if st.sidebar.button("Agregar Evento", key="sidebar_agregar"):
-        st.session_state["page"] = "Agregar"
-    if st.sidebar.button("Editar/Eliminar Evento", key="sidebar_editar"):
-        st.session_state["page"] = "Editar"
-    if st.sidebar.button("Vista Mensual", key="sidebar_mensual"):
-        st.session_state["page"] = "Mensual"
-    if st.sidebar.button("Vista Anual", key="sidebar_anual"):
-        st.session_state["page"] = "Anual"
-    if st.sidebar.button("Configuración", key="sidebar_config"):
-        st.session_state["page"] = "Config"
+    for lbl, pg in [("Dashboard","Dashboard"),("Agregar Evento","Agregar"),
+                    ("Editar/Eliminar","Editar"),("Vista Mensual","Mensual"),
+                    ("Vista Anual","Anual"),("Configuración","Config")]:
+        if st.sidebar.button(lbl, key=f"side_{pg}"):
+            st.session_state["page"] = pg
 
-    page = st.session_state["page"]
-    if page == "Dashboard":
-        dashboard(df)
-    elif page == "Agregar":
-        vista_agregar(df, client, sheet_id)
-    elif page == "Editar":
-        vista_editar_eliminar(df, client, sheet_id)
-    elif page == "Mensual":
-        vista_mensual(df, config_dict)
-    elif page == "Anual":
-        vista_anual(df, config_dict)
-    elif page == "Config":
-        vista_configuracion(client, sheet_id)
+    pg = st.session_state["page"]
+    if pg == "Dashboard": dashboard(df, cfg)
+    elif pg == "Agregar": vista_agregar(df, cli, SHEET_ID)
+    elif pg == "Editar":  vista_editar_eliminar(df, cli, SHEET_ID)
+    elif pg == "Mensual": vista_mensual(df, cfg)
+    elif pg == "Anual":   vista_anual(df, cfg)
+    elif pg == "Config":  vista_configuracion(cli, SHEET_ID)
 
 if __name__ == "__main__":
     main()
