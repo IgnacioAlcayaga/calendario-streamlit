@@ -1,10 +1,6 @@
 # ======================================================
 # CALENDARIO DE CONTENIDOS – v3.2  (19‑Abr‑2025)
 # ------------------------------------------------------
-# * Dash ±10 años siempre visible, fechas 100 % robustas
-# * Gráficos donuts en Dashboard
-# * Vista Mensual/Anual ya no se cortan aunque el año esté vacío
-# ======================================================
 
 import streamlit as st
 import pandas as pd
@@ -164,7 +160,7 @@ def dashboard(df: pd.DataFrame, cfg: dict):
     wks   = weeks_in_year(yr)
 
     # =====================================================
-    # 1) KPI global + gráfico donut
+    # 1) KPI global + conteo por estado
     # =====================================================
     objetivo_total  = sum(v * wks for v in cfg.values())
     planeado_total  = len(df_yr)
@@ -174,33 +170,53 @@ def dashboard(df: pd.DataFrame, cfg: dict):
               f"{planeado_total}/{objetivo_total}",
               delta=f"{planeado_total - objetivo_total}")
 
-    fig_total = px.pie(
-        values=[planeado_total, pendiente_total],
-        names=["Planificado", "Pendiente"],
-        hole=0.5,
-        title="Progreso anual")
-    fig_total.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig_total, use_container_width=True)
-
-    # =====================================================
-    # 2) Conteo por estado (tabla + donut)
-    # =====================================================
     vc_estado = df_yr["Estado"].value_counts().reindex(
         ["Planeación", "Diseño", "Programado", "Publicado"], fill_value=0)
+
+    # Actualizar "Total" para reflejar el objetivo anual
+    vc_estado["Total"] = objetivo_total
 
     st.subheader("Conteo por estado (año seleccionado)")
     st.dataframe(vc_estado.rename("Planificados").to_frame())
 
+    # Actualizar el gráfico de conteo por estado
+    total_values = vc_estado.values
+    total_sum = sum(total_values)
+
+    # Crear etiquetas personalizadas con porcentajes
+    custom_labels = [
+        f"{name} ({value / total_sum:.1%})" for name, value in zip(vc_estado.index, total_values)
+    ]
+
     fig_estado = px.pie(
         values=vc_estado.values,
-        names=vc_estado.index,
+        names=custom_labels,  # Usar etiquetas personalizadas
         hole=0.4,
-        title="Distribución de estados")
-    fig_estado.update_traces(textinfo="percent+label")
+        title="Distribución de estados",
+        color=vc_estado.index,
+        color_discrete_map={
+            "Total": "rgb(170, 170, 170)",  # Gris
+            "Planeación": "rgb(0, 104, 201)",  # Azul
+            "Diseño": "rgb(255, 214, 0)",  # Amarillo
+            "Programado": "rgb(250, 149, 56)",  # Naranja
+            "Publicado": "rgb(3, 221, 82)",  # Verde
+        },
+    )
+    # Configurar etiquetas externas y eliminar las internas
+    fig_estado.update_traces(
+        textinfo="none",  # No mostrar etiquetas dentro del gráfico
+        showlegend=True   # Mantener las etiquetas a la derecha
+    )
+    # Aumentar el tamaño de la fuente en la leyenda
+    fig_estado.update_layout(
+        legend=dict(
+            font=dict(size=20)  # Cambiar el tamaño de la fuente de la leyenda
+        )
+    )
     st.plotly_chart(fig_estado, use_container_width=True)
 
     # =====================================================
-    # 3) Por red social
+    # 2) Por red social
     # =====================================================
     st.subheader("Planificado vs objetivo por red social")
     redes = sorted(cfg)
@@ -213,10 +229,23 @@ def dashboard(df: pd.DataFrame, cfg: dict):
         pendiente = max(objetivo - planeado, 0)
         met_cols[i].metric(red, f"{planeado}/{objetivo}")
 
-        pie = px.pie(values=[planeado, pendiente],
-                     names=["Planificado", "Pendiente"],
-                     hole=0.55, title=red)
-        pie.update_traces(textinfo="percent+label", showlegend=False)
+        pie = px.pie(
+            values=[planeado, pendiente],
+            names=["Planificado", "Pendiente"],
+            hole=0.55,
+            title=red,
+            color=["Planificado", "Pendiente"],
+            color_discrete_map={
+                "Planificado": "rgb(3, 221, 82)",  # Verde
+                "Pendiente": "rgb(170, 170, 170)",  # Gris
+            },
+        )
+        # Configurar etiquetas externas con nombre y porcentaje
+        pie.update_traces(
+            textinfo="label+percent",  # Mostrar nombre y porcentaje en las etiquetas externas
+            textposition="outside",   # Posicionar las etiquetas fuera del gráfico
+            showlegend=True           # Mantener las etiquetas a la derecha
+        )
         pie_cols[i].plotly_chart(pie, use_container_width=True)
 
 # ---------- AGREGAR / EDITAR / MENÚ / CONFIG (igual que 3.0) ----------
