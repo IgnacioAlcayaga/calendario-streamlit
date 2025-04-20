@@ -1,6 +1,10 @@
 # ======================================================
 # CALENDARIO DE CONTENIDOS – v3.2  (19‑Abr‑2025)
 # ------------------------------------------------------
+# * Dash ±10 años siempre visible, fechas 100 % robustas
+# * Gráficos donuts en Dashboard
+# * Vista Mensual/Anual ya no se cortan aunque el año esté vacío
+# ======================================================
 
 import streamlit as st
 import pandas as pd
